@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<menu>
+  <item><path>civicrm/admin/m365-group-sync</path><page_callback>CRM_M365GroupSync_Form_Admin</page_callback><title>Microsoft 365 Group Sync</title><access_arguments>administer Microsoft 365 group sync</access_arguments></item>
+  <item><path>civicrm/admin/m365-group-sync/oauth/callback</path><page_callback>CRM_M365GroupSync_Page_OAuthCallback</page_callback><title>Microsoft 365 Authorization</title><access_arguments>administer Microsoft 365 group sync</access_arguments></item>
+  <item><path>civicrm/admin/m365-group-sync/log</path><page_callback>CRM_M365GroupSync_Page_Log</page_callback><title>Microsoft 365 Group Sync Log</title><access_arguments>administer Microsoft 365 group sync</access_arguments></item>
+</menu>

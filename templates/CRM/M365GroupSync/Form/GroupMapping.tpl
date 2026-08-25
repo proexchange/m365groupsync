@@ -1,0 +1,1 @@
+<div class="crm-section crm-m365-group-mapping"><div class="label">{$form.m365_group_id.label}</div><div class="content">{$form.m365_group_id.html}<div class="description">{ts}CiviCRM is authoritative. The first synchronization may remove non-owner Microsoft 365 members not represented by this CiviCRM Group.{/ts}</div></div></div>
