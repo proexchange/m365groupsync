@@ -8,26 +8,29 @@ class CRM_M365GroupSync_Service_Sync {
   private ?CRM_M365GroupSync_Service_Graph $graph = NULL;
 
   public static function groupLockName(int $groupId): string {
-    return 'data.m365groupsync.group.' . $groupId;
+    return 'data.m365groupsync' . CRM_M365GroupSync_Service_Domain::lockSuffix() . '.group.' . $groupId;
   }
 
   public static function requestCancellationForGroup(int $groupId): int {
     $dao = CRM_Core_DAO::executeQuery(
-      'UPDATE civicrm_m365_sync_run SET cancel_requested=1,heartbeat_date=NOW() WHERE civicrm_group_id=%1 AND status IN (' . self::ACTIVE . ')',
-      [1 => [$groupId, 'Positive']]
+      'UPDATE civicrm_m365_sync_run SET cancel_requested=1,heartbeat_date=NOW() WHERE domain_id=%1 AND civicrm_group_id=%2 AND status IN (' . self::ACTIVE . ')',
+      [1 => [self::domainId(), 'Positive'], 2 => [$groupId, 'Positive']]
     );
     return (int) $dao->affectedRows();
   }
 
-  public static function requestCancellationForAll(): int {
+  public static function requestCancellationForAll(bool $allDomains = FALSE): int {
+    $where = $allDomains ? '' : ' WHERE domain_id=%1';
     $dao = CRM_Core_DAO::executeQuery(
-      'UPDATE civicrm_m365_sync_run SET cancel_requested=1,heartbeat_date=NOW() WHERE status IN (' . self::ACTIVE . ')'
+      'UPDATE civicrm_m365_sync_run SET cancel_requested=1,heartbeat_date=NOW()' . ($allDomains ? ' WHERE' : ' WHERE domain_id=%1 AND') . ' status IN (' . self::ACTIVE . ')',
+      $allDomains ? [] : [1 => [self::domainId(), 'Positive']]
     );
     return (int) $dao->affectedRows();
   }
 
   /** Compare completes immediately; Dry Run and Sync return a queued run. */
   public function run(int $groupId, string $m365GroupId, string $mode = 'compare'): array {
+    CRM_M365GroupSync_Service_Domain::assertResolved();
     if ($mode === 'compare') {
       return $this->compare($groupId, $m365GroupId);
     }
@@ -50,6 +53,7 @@ class CRM_M365GroupSync_Service_Sync {
   }
 
   public function start(int $groupId, string $m365GroupId, string $mode, string $source = 'manual', ?string $operationId = NULL): array {
+    CRM_M365GroupSync_Service_Domain::assertResolved();
     if (!in_array($mode, ['dry_run', 'sync'], TRUE)) {
       throw new CRM_Core_Exception(ts('Only Dry Run and Sync can be queued.'));
     }
@@ -102,16 +106,16 @@ class CRM_M365GroupSync_Service_Sync {
       $this->processRun($runId);
       $count++;
     }
-    return ['batches_processed' => $count, 'active_runs' => (int) CRM_Core_DAO::singleValueQuery('SELECT COUNT(*) FROM civicrm_m365_sync_run WHERE status IN (' . self::ACTIVE . ')')];
+    return ['batches_processed' => $count, 'active_runs' => (int) CRM_Core_DAO::singleValueQuery('SELECT COUNT(*) FROM civicrm_m365_sync_run WHERE domain_id=%1 AND status IN (' . self::ACTIVE . ')', [1 => [self::domainId(), 'Positive']])];
   }
 
   public function cancelOperation(string $operationId): array {
-    CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET cancel_requested=1,heartbeat_date=NOW() WHERE operation_id=%1 AND status IN (' . self::ACTIVE . ')', [1 => [$operationId, 'String']]);
+    CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET cancel_requested=1,heartbeat_date=NOW() WHERE domain_id=%1 AND operation_id=%2 AND status IN (' . self::ACTIVE . ')', [1 => [self::domainId(), 'Positive'], 2 => [$operationId, 'String']]);
     return $this->operationStatus($operationId);
   }
 
   public function operationStatus(string $operationId): array {
-    $dao = CRM_Core_DAO::executeQuery('SELECT r.*,g.title group_title FROM civicrm_m365_sync_run r LEFT JOIN civicrm_group g ON g.id=r.civicrm_group_id WHERE operation_id=%1 ORDER BY r.id', [1 => [$operationId, 'String']]);
+    $dao = CRM_Core_DAO::executeQuery('SELECT r.*,g.title group_title FROM civicrm_m365_sync_run r LEFT JOIN civicrm_group g ON g.id=r.civicrm_group_id WHERE r.domain_id=%1 AND operation_id=%2 ORDER BY r.id', [1 => [self::domainId(), 'Positive'], 2 => [$operationId, 'String']]);
     $runs = []; $active = 0; $errors = 0;
     while ($dao->fetch()) {
       $isActive = in_array($dao->status, ['queued', 'running', 'retry_wait'], TRUE);
@@ -184,9 +188,9 @@ class CRM_M365GroupSync_Service_Sync {
     $total = count($data['missing']) + count($data['extras']);
     $processed = $run['mode'] === 'dry_run' ? count($data['extras']) : 0;
     $phase = $data['missing'] ? 'resolve' : ($run['mode'] === 'sync' && $data['extras'] ? 'remove' : 'complete');
-    CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET status=%1,phase=%2,total_items=%3,processed_items=%4,retry_count=0,summary=%5,heartbeat_date=NOW() WHERE run_id=%6', [
+    CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET status=%1,phase=%2,total_items=%3,processed_items=%4,retry_count=0,summary=%5,heartbeat_date=NOW() WHERE domain_id=%6 AND run_id=%7', [
       1 => [$phase === 'complete' ? (($summary['missing'] || $summary['extra']) ? 'differences_found' : 'success') : 'running', 'String'],
-      2 => [$phase, 'String'], 3 => [$total, 'Integer'], 4 => [$processed, 'Integer'], 5 => [json_encode($summary), 'String'], 6 => [$run['run_id'], 'String'],
+      2 => [$phase, 'String'], 3 => [$total, 'Integer'], 4 => [$processed, 'Integer'], 5 => [json_encode($summary), 'String'], 6 => [self::domainId(), 'Positive'], 7 => [$run['run_id'], 'String'],
     ]);
     if ($phase === 'complete') $this->finish($run['run_id'], $summary, ($summary['missing'] || $summary['extra']) ? 'differences_found' : 'success');
   }
@@ -256,14 +260,14 @@ class CRM_M365GroupSync_Service_Sync {
   private function advance(string $runId): void {
     for ($i = 0; $i < 5; $i++) {
       $run = $this->getRun($runId); if (!$run || !in_array($run['status'], ['queued', 'running', 'retry_wait'], TRUE)) return;
-      $pending = (int) CRM_Core_DAO::singleValueQuery("SELECT COUNT(*) FROM civicrm_m365_sync_work WHERE run_id=%1 AND phase=%2 AND state IN ('pending','retry')", [1 => [$runId, 'String'], 2 => [$run['phase'], 'String']]);
+      $pending = (int) CRM_Core_DAO::singleValueQuery("SELECT COUNT(*) FROM civicrm_m365_sync_work WHERE domain_id=%1 AND run_id=%2 AND phase=%3 AND state IN ('pending','retry')", [1 => [self::domainId(), 'Positive'], 2 => [$runId, 'String'], 3 => [$run['phase'], 'String']]);
       if ($pending) { $this->waitForRetry($run); return; }
       $next = match ($run['phase']) { 'resolve' => $run['mode'] === 'dry_run' ? 'complete' : 'invite', 'invite' => 'add', 'add' => 'remove', default => 'complete' };
       if ($next === 'complete') {
         $status = $run['error_items'] ? 'completed_with_errors' : (($run['mode'] === 'dry_run' && ($run['summary']['missing'] || $run['summary']['extra'])) ? 'differences_found' : 'success');
         $this->finish($runId, $run['summary'], $status); return;
       }
-      CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET phase=%1,status='running',next_retry_date=NULL,heartbeat_date=NOW() WHERE run_id=%2", [1 => [$next, 'String'], 2 => [$runId, 'String']]);
+      CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET phase=%1,status='running',next_retry_date=NULL,heartbeat_date=NOW() WHERE domain_id=%2 AND run_id=%3", [1 => [$next, 'String'], 2 => [self::domainId(), 'Positive'], 3 => [$runId, 'String']]);
     }
   }
 
@@ -300,11 +304,11 @@ class CRM_M365GroupSync_Service_Sync {
     $emails = []; $qualifying = 0; $skipped = 0; $logs = [];
     foreach ($ids as $id) {
       $email = $this->effectiveEmail($byContact[$id] ?? []);
-      if (!$email) { $skipped++; $logs[] = [$runId, $groupId, $id, '', 'contact_skipped', 'success', 'No valid, non-held bulk or primary email', '', '']; }
+      if (!$email) { $skipped++; $logs[] = [self::domainId(), $runId, $groupId, $id, '', 'contact_skipped', 'success', 'No valid, non-held bulk or primary email', '', '']; }
       else { $qualifying++; $emails[$email][] = $id; }
     }
     $duplicates = $qualifying - count($emails);
-    foreach ($emails as $email => $contactIds) if (count($contactIds) > 1) $logs[] = [$runId, $groupId, $contactIds[0], $email, 'duplicate_email', 'success', 'Duplicate effective email; one Microsoft membership will be managed', '', ''];
+    foreach ($emails as $email => $contactIds) if (count($contactIds) > 1) $logs[] = [self::domainId(), $runId, $groupId, $contactIds[0], $email, 'duplicate_email', 'success', 'Duplicate effective email; one Microsoft membership will be managed', '', ''];
     $this->logMany($logs); return compact('emails', 'qualifying', 'skipped', 'duplicates');
   }
 
@@ -324,62 +328,63 @@ class CRM_M365GroupSync_Service_Sync {
 
   private function createRun(int $groupId, string $m365Id, string $mode, string $source, string $operation, string $status, string $phase): array {
     $run = $this->randomId();
-    CRM_Core_DAO::executeQuery('INSERT INTO civicrm_m365_sync_run (run_id,operation_id,civicrm_group_id,m365_group_id,mode,source,status,phase,started_date,heartbeat_date) VALUES (%1,%2,%3,%4,%5,%6,%7,%8,NOW(),NOW())', [1 => [$run, 'String'], 2 => [$operation, 'String'], 3 => [$groupId, 'Positive'], 4 => [$m365Id, 'String'], 5 => [$mode, 'String'], 6 => [$source, 'String'], 7 => [$status, 'String'], 8 => [$phase, 'String']]);
+    CRM_Core_DAO::executeQuery('INSERT INTO civicrm_m365_sync_run (domain_id,run_id,operation_id,civicrm_group_id,m365_group_id,mode,source,status,phase,started_date,heartbeat_date) VALUES (%1,%2,%3,%4,%5,%6,%7,%8,%9,NOW(),NOW())', [1 => [self::domainId(), 'Positive'], 2 => [$run, 'String'], 3 => [$operation, 'String'], 4 => [$groupId, 'Positive'], 5 => [$m365Id, 'String'], 6 => [$mode, 'String'], 7 => [$source, 'String'], 8 => [$status, 'String'], 9 => [$phase, 'String']]);
     return ['run_id' => $run, 'operation_id' => $operation, 'group_id' => $groupId, 'civicrm_group_id' => $groupId, 'm365_group_id' => $m365Id, 'mode' => $mode, 'source' => $source, 'status' => $status, 'phase' => $phase];
   }
   private function getRun(string $id): ?array {
-    $dao = CRM_Core_DAO::executeQuery('SELECT * FROM civicrm_m365_sync_run WHERE run_id=%1 LIMIT 1', [1 => [$id, 'String']]); if (!$dao->fetch()) return NULL;
+    $dao = CRM_Core_DAO::executeQuery('SELECT * FROM civicrm_m365_sync_run WHERE domain_id=%1 AND run_id=%2 LIMIT 1', [1 => [self::domainId(), 'Positive'], 2 => [$id, 'String']]); if (!$dao->fetch()) return NULL;
     return ['run_id' => $dao->run_id, 'operation_id' => $dao->operation_id, 'civicrm_group_id' => (int) $dao->civicrm_group_id, 'm365_group_id' => $dao->m365_group_id, 'mode' => $dao->mode, 'source' => $dao->source, 'status' => $dao->status, 'phase' => $dao->phase, 'error_items' => (int) $dao->error_items, 'retry_count' => (int) $dao->retry_count, 'cancel_requested' => (bool) $dao->cancel_requested, 'summary' => json_decode((string) $dao->summary, TRUE) ?: []];
   }
   private function activeRun(int $groupId): ?array {
-    $dao = CRM_Core_DAO::executeQuery('SELECT * FROM civicrm_m365_sync_run WHERE civicrm_group_id=%1 AND status IN (' . self::ACTIVE . ') ORDER BY id DESC LIMIT 1', [1 => [$groupId, 'Positive']]); if (!$dao->fetch()) return NULL;
+    $dao = CRM_Core_DAO::executeQuery('SELECT * FROM civicrm_m365_sync_run WHERE domain_id=%1 AND civicrm_group_id=%2 AND status IN (' . self::ACTIVE . ') ORDER BY id DESC LIMIT 1', [1 => [self::domainId(), 'Positive'], 2 => [$groupId, 'Positive']]); if (!$dao->fetch()) return NULL;
     return ['run_id' => $dao->run_id, 'operation_id' => $dao->operation_id, 'group_id' => (int) $dao->civicrm_group_id, 'm365_group_id' => $dao->m365_group_id, 'mode' => $dao->mode, 'source' => $dao->source, 'status' => $dao->status, 'phase' => $dao->phase];
   }
   private function nextRun(?string $operation): ?string {
-    $where = $operation ? 'AND operation_id=%1' : ''; $params = $operation ? [1 => [$operation, 'String']] : [];
-    $dao = CRM_Core_DAO::executeQuery('SELECT run_id FROM civicrm_m365_sync_run WHERE status IN (' . self::ACTIVE . ") $where AND (next_retry_date IS NULL OR next_retry_date<=NOW()) ORDER BY heartbeat_date,id LIMIT 1", $params);
+    $where = $operation ? 'AND operation_id=%2' : ''; $params = [1 => [self::domainId(), 'Positive']]; if ($operation) $params[2] = [$operation, 'String'];
+    $dao = CRM_Core_DAO::executeQuery('SELECT run_id FROM civicrm_m365_sync_run WHERE domain_id=%1 AND status IN (' . self::ACTIVE . ") $where AND (next_retry_date IS NULL OR next_retry_date<=NOW()) ORDER BY heartbeat_date,id LIMIT 1", $params);
     return $dao->fetch() ? $dao->run_id : NULL;
   }
   private function dueItems(string $run, string $phase): array {
-    $dao = CRM_Core_DAO::executeQuery("SELECT * FROM civicrm_m365_sync_work WHERE run_id=%1 AND phase=%2 AND state IN ('pending','retry') AND (available_date IS NULL OR available_date<=NOW()) ORDER BY id LIMIT " . self::BATCH, [1 => [$run, 'String'], 2 => [$phase, 'String']]); $out = [];
+    $dao = CRM_Core_DAO::executeQuery("SELECT * FROM civicrm_m365_sync_work WHERE domain_id=%1 AND run_id=%2 AND phase=%3 AND state IN ('pending','retry') AND (available_date IS NULL OR available_date<=NOW()) ORDER BY id LIMIT " . self::BATCH, [1 => [self::domainId(), 'Positive'], 2 => [$run, 'String'], 3 => [$phase, 'String']]); $out = [];
     while ($dao->fetch()) $out[] = ['id' => (int) $dao->id, 'contact_id' => (int) $dao->civicrm_contact_id, 'effective_email' => $dao->effective_email, 'm365_user_id' => $dao->m365_user_id, 'attempts' => (int) $dao->attempts]; return $out;
   }
   private function insertWorkMany(array $rows): void {
     foreach (array_chunk($rows, 100) as $chunk) {
       $params=[];$values=[];$p=1;
-      foreach($chunk as $row){$h=[];$types=['String','String','String','Integer','String','String'];foreach($row as $i=>$value){$params[$p]=[$value,$types[$i]];$h[]='%'.$p++;}$values[]=sprintf("(%s,%s,%s,'pending',NULLIF(%s,0),NULLIF(%s,''),NULLIF(%s,''),0,NOW(),NOW())",...$h);}
-      CRM_Core_DAO::executeQuery('INSERT INTO civicrm_m365_sync_work (run_id,item_type,phase,state,civicrm_contact_id,effective_email,m365_user_id,attempts,created_date,modified_date) VALUES '.implode(',',$values),$params);
+      foreach($chunk as $row){array_unshift($row,self::domainId());$h=[];$types=['Integer','String','String','String','Integer','String','String'];foreach($row as $i=>$value){$params[$p]=[$value,$types[$i]];$h[]='%'.$p++;}$values[]=sprintf("(%s,%s,%s,%s,'pending',NULLIF(%s,0),NULLIF(%s,''),NULLIF(%s,''),0,NOW(),NOW())",...$h);}
+      CRM_Core_DAO::executeQuery('INSERT INTO civicrm_m365_sync_work (domain_id,run_id,item_type,phase,state,civicrm_contact_id,effective_email,m365_user_id,attempts,created_date,modified_date) VALUES '.implode(',',$values),$params);
     }
   }
-  private function move(int $id, string $phase, string $user = ''): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET phase=%1,state='pending',m365_user_id=COALESCE(NULLIF(%2,''),m365_user_id),attempts=0,available_date=NULL,message=NULL,modified_date=NOW() WHERE id=%3", [1 => [$phase, 'String'], 2 => [$user, 'String'], 3 => [$id, 'Integer']]); }
-  private function done(string $run, int $id): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET state='done',available_date=NULL,modified_date=NOW() WHERE id=%1", [1 => [$id, 'Integer']]); CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET processed_items=processed_items+1,heartbeat_date=NOW() WHERE run_id=%1', [1 => [$run, 'String']]); }
-  private function failItem(array $run, array $item, string $message, string $action, array &$logs, array &$summary): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET state='error',message=%1,modified_date=NOW() WHERE id=%2", [1 => [$message, 'String'], 2 => [$item['id'], 'Integer']]); CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET processed_items=processed_items+1,error_items=error_items+1 WHERE run_id=%1', [1 => [$run['run_id'], 'String']]); $summary['errors']++; $logs[] = $this->logRow($run, $item, $action, 'error', $message, $item['m365_user_id'] ?: NULL); }
-  private function retryOrFail(array $run, array $item, string $message, ?int $retry): void { $attempt = $item['attempts'] + 1; if ($attempt >= self::MAX_ATTEMPTS) { $logs=[]; $summary=$this->getRun($run['run_id'])['summary']; $this->failItem($run,$item,$message,$run['phase']==='remove'?'member_remove_failed':'member_add_failed',$logs,$summary); $this->saveSummary($run['run_id'],$summary); $this->logMany($logs); return; } $delay=$retry??min(900,(2**$attempt)+random_int(0,3)); CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET state='retry',attempts=%1,available_date=DATE_ADD(NOW(),INTERVAL %2 SECOND),message=%3,modified_date=NOW() WHERE id=%4", [1=>[$attempt,'Integer'],2=>[$delay,'Integer'],3=>[$message,'String'],4=>[$item['id'],'Integer']]); }
+  private function move(int $id, string $phase, string $user = ''): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET phase=%1,state='pending',m365_user_id=COALESCE(NULLIF(%2,''),m365_user_id),attempts=0,available_date=NULL,message=NULL,modified_date=NOW() WHERE domain_id=%3 AND id=%4", [1 => [$phase, 'String'], 2 => [$user, 'String'], 3 => [self::domainId(), 'Positive'], 4 => [$id, 'Integer']]); }
+  private function done(string $run, int $id): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET state='done',available_date=NULL,modified_date=NOW() WHERE domain_id=%1 AND id=%2", [1 => [self::domainId(), 'Positive'], 2 => [$id, 'Integer']]); CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET processed_items=processed_items+1,heartbeat_date=NOW() WHERE domain_id=%1 AND run_id=%2', [1 => [self::domainId(), 'Positive'], 2 => [$run, 'String']]); }
+  private function failItem(array $run, array $item, string $message, string $action, array &$logs, array &$summary): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET state='error',message=%1,modified_date=NOW() WHERE domain_id=%2 AND id=%3", [1 => [$message, 'String'], 2 => [self::domainId(), 'Positive'], 3 => [$item['id'], 'Integer']]); CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET processed_items=processed_items+1,error_items=error_items+1 WHERE domain_id=%1 AND run_id=%2', [1 => [self::domainId(), 'Positive'], 2 => [$run['run_id'], 'String']]); $summary['errors']++; $logs[] = $this->logRow($run, $item, $action, 'error', $message, $item['m365_user_id'] ?: NULL); }
+  private function retryOrFail(array $run, array $item, string $message, ?int $retry): void { $attempt = $item['attempts'] + 1; if ($attempt >= self::MAX_ATTEMPTS) { $logs=[]; $summary=$this->getRun($run['run_id'])['summary']; $this->failItem($run,$item,$message,$run['phase']==='remove'?'member_remove_failed':'member_add_failed',$logs,$summary); $this->saveSummary($run['run_id'],$summary); $this->logMany($logs); return; } $delay=$retry??min(900,(2**$attempt)+random_int(0,3)); CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET state='retry',attempts=%1,available_date=DATE_ADD(NOW(),INTERVAL %2 SECOND),message=%3,modified_date=NOW() WHERE domain_id=%4 AND id=%5", [1=>[$attempt,'Integer'],2=>[$delay,'Integer'],3=>[$message,'String'],4=>[self::domainId(),'Positive'],5=>[$item['id'],'Integer']]); }
   private function deferSnapshot(array $run, Throwable $e): bool {
     if (!($e instanceof CRM_M365GroupSync_GraphException) || !in_array($e->httpStatus, [0,429,503,504], TRUE)) return FALSE;
     $attempt = $run['retry_count'] + 1; if ($attempt >= self::MAX_ATTEMPTS) return FALSE;
     $delay = $e->retryAfter ?? min(900,(2**$attempt)+random_int(0,3));
-    CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status='retry_wait',retry_count=%1,next_retry_date=DATE_ADD(NOW(),INTERVAL %2 SECOND),heartbeat_date=NOW() WHERE run_id=%3",[1=>[$attempt,'Integer'],2=>[$delay,'Integer'],3=>[$run['run_id'],'String']]);
+    CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status='retry_wait',retry_count=%1,next_retry_date=DATE_ADD(NOW(),INTERVAL %2 SECOND),heartbeat_date=NOW() WHERE domain_id=%3 AND run_id=%4",[1=>[$attempt,'Integer'],2=>[$delay,'Integer'],3=>[self::domainId(),'Positive'],4=>[$run['run_id'],'String']]);
     return TRUE;
   }
-  private function waitForRetry(array $run): void { $next=CRM_Core_DAO::singleValueQuery("SELECT MIN(available_date) FROM civicrm_m365_sync_work WHERE run_id=%1 AND phase=%2 AND state='retry'",[1=>[$run['run_id'],'String'],2=>[$run['phase'],'String']]); if($next) CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status='retry_wait',next_retry_date=%1,heartbeat_date=NOW() WHERE run_id=%2",[1=>[$next,'String'],2=>[$run['run_id'],'String']]); }
-  private function heartbeat(string $run,string $status): void { CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET status=%1,heartbeat_date=NOW(),next_retry_date=NULL WHERE run_id=%2',[1=>[$status,'String'],2=>[$run,'String']]); }
-  private function finish(string $run,array $summary,string $status): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status=%1,phase='complete',completed_date=NOW(),heartbeat_date=NOW(),next_retry_date=NULL,summary=%2 WHERE run_id=%3",[1=>[$status,'String'],2=>[json_encode($summary),'String'],3=>[$run,'String']]); }
-  private function failRun(string $run,Throwable $e): void { try { $summary=$this->getRun($run)['summary']??[];$summary['error']=$e->getMessage();CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status='error',phase='complete',completed_date=NOW(),heartbeat_date=NOW(),summary=%1 WHERE run_id=%2",[1=>[json_encode($summary),'String'],2=>[$run,'String']]); } catch(Throwable $ignored){ Civi::log()->error('Unable to record failed M365 run: {error}',['error'=>$ignored->getMessage()]); } }
-  private function cancelRun(string $run): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET state='cancelled',modified_date=NOW() WHERE run_id=%1 AND state IN ('pending','retry')",[1=>[$run,'String']]); CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status='cancelled',phase='complete',completed_date=NOW(),heartbeat_date=NOW(),next_retry_date=NULL WHERE run_id=%1",[1=>[$run,'String']]); }
-  private function saveSummary(string $run,array $summary): void { CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET summary=%1,heartbeat_date=NOW() WHERE run_id=%2',[1=>[json_encode($summary),'String'],2=>[$run,'String']]); }
+  private function waitForRetry(array $run): void { $next=CRM_Core_DAO::singleValueQuery("SELECT MIN(available_date) FROM civicrm_m365_sync_work WHERE domain_id=%1 AND run_id=%2 AND phase=%3 AND state='retry'",[1=>[self::domainId(),'Positive'],2=>[$run['run_id'],'String'],3=>[$run['phase'],'String']]); if($next) CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status='retry_wait',next_retry_date=%1,heartbeat_date=NOW() WHERE domain_id=%2 AND run_id=%3",[1=>[$next,'String'],2=>[self::domainId(),'Positive'],3=>[$run['run_id'],'String']]); }
+  private function heartbeat(string $run,string $status): void { CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET status=%1,heartbeat_date=NOW(),next_retry_date=NULL WHERE domain_id=%2 AND run_id=%3',[1=>[$status,'String'],2=>[self::domainId(),'Positive'],3=>[$run,'String']]); }
+  private function finish(string $run,array $summary,string $status): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status=%1,phase='complete',completed_date=NOW(),heartbeat_date=NOW(),next_retry_date=NULL,summary=%2 WHERE domain_id=%3 AND run_id=%4",[1=>[$status,'String'],2=>[json_encode($summary),'String'],3=>[self::domainId(),'Positive'],4=>[$run,'String']]); }
+  private function failRun(string $run,Throwable $e): void { try { $summary=$this->getRun($run)['summary']??[];$summary['error']=$e->getMessage();CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status='error',phase='complete',completed_date=NOW(),heartbeat_date=NOW(),summary=%1 WHERE domain_id=%2 AND run_id=%3",[1=>[json_encode($summary),'String'],2=>[self::domainId(),'Positive'],3=>[$run,'String']]); } catch(Throwable $ignored){ Civi::log()->error('Unable to record failed M365 run: {error}',['error'=>$ignored->getMessage()]); } }
+  private function cancelRun(string $run): void { CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_work SET state='cancelled',modified_date=NOW() WHERE domain_id=%1 AND run_id=%2 AND state IN ('pending','retry')",[1=>[self::domainId(),'Positive'],2=>[$run,'String']]); CRM_Core_DAO::executeQuery("UPDATE civicrm_m365_sync_run SET status='cancelled',phase='complete',completed_date=NOW(),heartbeat_date=NOW(),next_retry_date=NULL WHERE domain_id=%1 AND run_id=%2",[1=>[self::domainId(),'Positive'],2=>[$run,'String']]); }
+  private function saveSummary(string $run,array $summary): void { CRM_Core_DAO::executeQuery('UPDATE civicrm_m365_sync_run SET summary=%1,heartbeat_date=NOW() WHERE domain_id=%2 AND run_id=%3',[1=>[json_encode($summary),'String'],2=>[self::domainId(),'Positive'],3=>[$run,'String']]); }
   private function message(array $res): string { return (string)($res['body']['error']['message']??ts('Microsoft Graph request failed with status %1.',[1=>(int)($res['status']??0)])); }
   private function retryAfter(array $res): ?int { $v=$res['headers']['retry-after']??NULL;if($v===NULL)return NULL;if(is_numeric($v))return max(1,(int)$v);$time=strtotime((string)$v);return $time?max(1,$time-time()):NULL; }
   private function alreadyMember(array $res): bool { $message=strtolower($this->message($res));return (int)$res['status']===400&&(str_contains($message,'already exist')||str_contains($message,'already a member')); }
   private function client(): CRM_M365GroupSync_Service_Graph { return $this->graph??=new CRM_M365GroupSync_Service_Graph(); }
   private function randomId(): string { return CRM_Utils_String::createRandom(32,CRM_Utils_String::ALPHANUMERIC); }
-  private function logRow(array $run,array $item,string $action,string $result,string $message,?string $user): array { return [$run['run_id'],$run['civicrm_group_id'],$item['contact_id']?:0,$item['effective_email']?:'',$action,$result,$message,$run['m365_group_id'],$user?:'']; }
+  private function logRow(array $run,array $item,string $action,string $result,string $message,?string $user): array { return [self::domainId(),$run['run_id'],$run['civicrm_group_id'],$item['contact_id']?:0,$item['effective_email']?:'',$action,$result,$message,$run['m365_group_id'],$user?:'']; }
   private function logMany(array $rows): void {
     foreach(array_chunk($rows,100) as $chunk){$params=[];$values=[];$p=1;
-      foreach($chunk as $row){$h=[];$types=['String','Integer','Integer','String','String','String','String','String','String'];foreach($row as $i=>$value){$params[$p]=[$value,$types[$i]];$h[]='%'.$p++;}$values[]=sprintf("(%s,%s,NULLIF(%s,0),NULLIF(%s,''),%s,%s,%s,NULLIF(%s,''),NULLIF(%s,''),NOW())",...$h);}
-      CRM_Core_DAO::executeQuery('INSERT INTO civicrm_m365_sync_log (run_id,civicrm_group_id,civicrm_contact_id,effective_email,action,result,message,m365_group_id,m365_user_id,created_date) VALUES '.implode(',',$values),$params);
+      foreach($chunk as $row){$h=[];$types=['Integer','String','Integer','Integer','String','String','String','String','String','String'];foreach($row as $i=>$value){$params[$p]=[$value,$types[$i]];$h[]='%'.$p++;}$values[]=sprintf("(%s,%s,%s,NULLIF(%s,0),NULLIF(%s,''),%s,%s,%s,NULLIF(%s,''),NULLIF(%s,''),NOW())",...$h);}
+      CRM_Core_DAO::executeQuery('INSERT INTO civicrm_m365_sync_log (domain_id,run_id,civicrm_group_id,civicrm_contact_id,effective_email,action,result,message,m365_group_id,m365_user_id,created_date) VALUES '.implode(',',$values),$params);
     }
   }
 
-  public static function cleanupLogs(): int { $days=(int)Civi::settings()->get('m365_group_sync_retention_days');if($days<=0)return 0;$cutoff=date('Y-m-d H:i:s',strtotime('-'.$days.' days'));$ids=[];$dao=CRM_Core_DAO::executeQuery('SELECT run_id FROM civicrm_m365_sync_run WHERE started_date<%1',[1=>[$cutoff,'String']]);while($dao->fetch())$ids[]=$dao->run_id;foreach(array_chunk($ids,500)as$chunk){$q=CRM_Core_DAO::escapeStrings($chunk);CRM_Core_DAO::executeQuery("DELETE FROM civicrm_m365_sync_work WHERE run_id IN ($q)");CRM_Core_DAO::executeQuery("DELETE FROM civicrm_m365_sync_log WHERE run_id IN ($q)");CRM_Core_DAO::executeQuery("DELETE FROM civicrm_m365_sync_run WHERE run_id IN ($q)");}return count($ids); }
+  public static function cleanupLogs(): int { $days=(int)Civi::settings()->get('m365_group_sync_retention_days');if($days<=0)return 0;$cutoff=date('Y-m-d H:i:s',strtotime('-'.$days.' days'));$domain=self::domainId();$ids=[];$dao=CRM_Core_DAO::executeQuery('SELECT run_id FROM civicrm_m365_sync_run WHERE domain_id=%1 AND started_date<%2',[1=>[$domain,'Positive'],2=>[$cutoff,'String']]);while($dao->fetch())$ids[]=$dao->run_id;foreach(array_chunk($ids,500)as$chunk){$q=CRM_Core_DAO::escapeStrings($chunk);CRM_Core_DAO::executeQuery("DELETE FROM civicrm_m365_sync_work WHERE domain_id=$domain AND run_id IN ($q)");CRM_Core_DAO::executeQuery("DELETE FROM civicrm_m365_sync_log WHERE domain_id=$domain AND run_id IN ($q)");CRM_Core_DAO::executeQuery("DELETE FROM civicrm_m365_sync_run WHERE domain_id=$domain AND run_id IN ($q)");}return count($ids); }
+  private static function domainId(): int { return CRM_M365GroupSync_Service_Domain::id(); }
 }

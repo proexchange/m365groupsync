@@ -16,9 +16,10 @@ class CRM_M365GroupSync_Page_Log extends CRM_Core_Page {
       'search' => trim((string) CRM_Utils_Request::retrieve('event_search', 'String')),
     ];
 
+    $domainId = CRM_M365GroupSync_Service_Domain::id();
     [$runWhere, $runParams] = $groupId
-      ? ['WHERE r.civicrm_group_id=%1', [1 => [$groupId, 'Positive']]]
-      : ['', []];
+      ? ['WHERE r.domain_id=%1 AND r.civicrm_group_id=%2', [1 => [$domainId, 'Positive'], 2 => [$groupId, 'Positive']]]
+      : ['WHERE r.domain_id=%1', [1 => [$domainId, 'Positive']]];
     $runTotal = (int) CRM_Core_DAO::singleValueQuery("SELECT COUNT(*) FROM civicrm_m365_sync_run r $runWhere", $runParams);
     $runPage = $this->validPage($runPage, $runTotal, self::RUNS_PER_PAGE);
     $runOffset = ($runPage - 1) * self::RUNS_PER_PAGE;
@@ -52,7 +53,7 @@ class CRM_M365GroupSync_Page_Log extends CRM_Core_Page {
       ];
     }
 
-    [$eventWhere, $eventParams] = $this->eventWhere($filters);
+    [$eventWhere, $eventParams] = $this->eventWhere($filters, $domainId);
     $eventTotal = (int) CRM_Core_DAO::singleValueQuery("SELECT COUNT(*) FROM civicrm_m365_sync_log l $eventWhere", $eventParams);
     $eventPage = $this->validPage($eventPage, $eventTotal, self::EVENTS_PER_PAGE);
     $eventOffset = ($eventPage - 1) * self::EVENTS_PER_PAGE;
@@ -99,8 +100,8 @@ class CRM_M365GroupSync_Page_Log extends CRM_Core_Page {
     parent::run();
   }
 
-  private function eventWhere(array $filters): array {
-    $clauses = []; $params = []; $position = 1;
+  private function eventWhere(array $filters, int $domainId): array {
+    $clauses = ['l.domain_id=%1']; $params = [1 => [$domainId, 'Positive']]; $position = 2;
     if ($filters['group']) { $clauses[] = "l.civicrm_group_id=%$position"; $params[$position++] = [$filters['group'], 'Positive']; }
     if ($filters['action'] !== '') { $clauses[] = "l.action=%$position"; $params[$position++] = [$filters['action'], 'String']; }
     if ($filters['result'] !== '') { $clauses[] = "l.result=%$position"; $params[$position++] = [$filters['result'], 'String']; }
@@ -112,7 +113,7 @@ class CRM_M365GroupSync_Page_Log extends CRM_Core_Page {
   }
 
   private function groupOptions(): array {
-    $dao = CRM_Core_DAO::executeQuery('SELECT DISTINCT l.civicrm_group_id,g.title FROM civicrm_m365_sync_log l LEFT JOIN civicrm_group g ON g.id=l.civicrm_group_id ORDER BY g.title,l.civicrm_group_id');
+    $dao = CRM_Core_DAO::executeQuery('SELECT DISTINCT l.civicrm_group_id,g.title FROM civicrm_m365_sync_log l LEFT JOIN civicrm_group g ON g.id=l.civicrm_group_id WHERE l.domain_id=%1 ORDER BY g.title,l.civicrm_group_id', [1 => [CRM_M365GroupSync_Service_Domain::id(), 'Positive']]);
     $options = [];
     while ($dao->fetch()) $options[(int) $dao->civicrm_group_id] = $dao->title ?: '#' . $dao->civicrm_group_id;
     return $options;
@@ -120,9 +121,9 @@ class CRM_M365GroupSync_Page_Log extends CRM_Core_Page {
 
   private function distinctOptions(string $field, int $groupId): array {
     if (!in_array($field, ['action', 'result'], TRUE)) throw new InvalidArgumentException('Invalid log option field.');
-    $where = "WHERE `$field` IS NOT NULL AND `$field`<>''";
-    $params = [];
-    if ($groupId) { $where .= ' AND civicrm_group_id=%1'; $params[1] = [$groupId, 'Positive']; }
+    $where = "WHERE domain_id=%1 AND `$field` IS NOT NULL AND `$field`<>''";
+    $params = [1 => [CRM_M365GroupSync_Service_Domain::id(), 'Positive']];
+    if ($groupId) { $where .= ' AND civicrm_group_id=%2'; $params[2] = [$groupId, 'Positive']; }
     $dao = CRM_Core_DAO::executeQuery("SELECT DISTINCT `$field` AS value FROM civicrm_m365_sync_log $where ORDER BY `$field`", $params);
     $options = [];
     while ($dao->fetch()) $options[$dao->value] = ucwords(str_replace('_', ' ', $dao->value));

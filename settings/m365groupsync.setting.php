@@ -23,5 +23,7 @@ return [
   'm365_group_sync_last_auth' => $base + ['name' => 'm365_group_sync_last_auth', 'type' => 'String', 'default' => '', 'title' => ts('Last successful Microsoft authentication')],
   'm365_group_sync_invite_redirect_url' => $base + ['name' => 'm365_group_sync_invite_redirect_url', 'type' => 'String', 'default' => 'https://www.microsoft.com', 'title' => ts('Guest invitation redirect URL')],
   'm365_group_sync_last_auto_enqueue' => $base + ['name' => 'm365_group_sync_last_auto_enqueue', 'type' => 'Integer', 'default' => 0, 'title' => ts('Last automatic Microsoft 365 queue time')],
+  'm365_group_sync_automatic_cadence' => $base + ['name' => 'm365_group_sync_automatic_cadence', 'type' => 'String', 'default' => 'Hourly', 'title' => ts('Automatic Microsoft 365 synchronization cadence')],
+  'm365_group_sync_legacy_domain_resolution_required' => $base + ['name' => 'm365_group_sync_legacy_domain_resolution_required', 'type' => 'Boolean', 'default' => FALSE, 'title' => ts('Microsoft 365 legacy domain resolution required')],
   'm365_group_sync_last_cleanup' => $base + ['name' => 'm365_group_sync_last_cleanup', 'type' => 'Integer', 'default' => 0, 'title' => ts('Last Microsoft 365 log cleanup time')],
 ];

@@ -2,6 +2,11 @@
   <div class="crm-section">
     <div class="content">{$form.enabled.html} {$form.enabled.label}</div>
   </div>
+  <div class="crm-section"><div class="label">{$form.automatic_cadence.label}</div><div class="content">{$form.automatic_cadence.html}<div class="description">{ts}Automatic reconciliation is scheduled independently for this CiviCRM domain. The worker still runs each normal cron invocation to resume queued batches and retries.{/ts}</div></div></div>
+
+  {if $legacyResolutionRequired}
+    <div class="messages status no-popup"><strong>{ts}Legacy multidomain migration required.{/ts}</strong> {ts}Existing Microsoft 365 sync data has no domain ownership. Confirm that all legacy mappings, runs, logs, and queued items belong to this site’s CiviCRM domain before synchronization can resume.{/ts}<div class="crm-submit-buttons">{$form.claim_legacy.html}</div></div>
+  {/if}
 
   <fieldset>
     <legend>{ts}Microsoft 365 Authentication{/ts}</legend>

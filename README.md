@@ -2,6 +2,8 @@
 
 One-way reconciliation from CiviCRM Groups (including Smart Groups) to existing Microsoft 365 Groups. CiviCRM is authoritative; owners and all Microsoft 365 Group configuration are preserved.
 
+Requires CiviCRM 6.17 or later. This version uses CiviCRM 6.17's domain-aware cron support for multidomain installations.
+
 ## Install the extension
 
 1. Enable **Microsoft 365 Group Sync** in CiviCRM's **Manage Extensions** page.
@@ -94,6 +96,14 @@ The extension adds **Microsoft 365 Group Sync: administer synchronization**. Gra
 3. Run **Dry Run** to resolve identities in Microsoft Graph batches and predict guest creation, additions, and removals without Microsoft writes.
 4. Run **Sync Now** only after reviewing the first-sync removal warning. Dry Run and Sync are durable operations: the configuration page displays progress and processes one batch at a time. You may leave the page; an enabled scheduled job resumes queued work.
 5. Enable automatic synchronization when manual validation succeeds. The scheduled job checks for queued work whenever CiviCRM cron runs and starts a new automatic reconciliation.
+
+## Multidomain installations
+
+- Mappings, runs, logs, queue work, credentials, connection state, and automatic-sync settings are isolated by CiviCRM domain.
+- A Microsoft 365 Group can be mapped in only one CiviCRM domain.
+- Each domain that configures this extension receives its own **Microsoft 365 Group Membership Sync** scheduled job. CiviCRM cron must be bootstrapped for every participating domain/site.
+- The technical job runs with the **Always** frequency to resume batches and retries. Set each domain's **Automatic synchronization cadence** to Hourly, Daily, Weekly, or Monthly to control when it starts a new automatic reconciliation.
+- During upgrade of a legacy shared multidomain database, synchronization is blocked until an administrator confirms which current domain owns the legacy extension records. Single-domain databases migrate automatically.
 
 ## Queue processing and recovery
 

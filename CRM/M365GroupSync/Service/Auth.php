@@ -5,7 +5,7 @@ class CRM_M365GroupSync_Service_Auth {
   public const DELEGATED_SCOPES = 'openid profile offline_access User.Read Group.Read.All GroupMember.ReadWrite.All User.Read.All User.Invite.All';
 
   public static function connectionLockName(): string {
-    return 'data.m365groupsync.connection';
+    return 'data.m365groupsync' . CRM_M365GroupSync_Service_Domain::lockSuffix() . '.connection';
   }
 
   public function currentCredentialBinding(): string {

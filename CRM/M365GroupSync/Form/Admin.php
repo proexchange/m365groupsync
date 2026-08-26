@@ -19,6 +19,7 @@ class CRM_M365GroupSync_Form_Admin extends CRM_Core_Form {
   public function buildQuickForm(): void {
     $hasRefreshToken = (new CRM_M365GroupSync_Service_Auth())->secret('m365_group_sync_refresh_token') !== '';
     $this->add('checkbox', 'enabled', ts('Enable automatic Microsoft 365 synchronization'));
+    $this->add('select', 'automatic_cadence', ts('Automatic synchronization cadence'), ['Hourly' => ts('Hourly'), 'Daily' => ts('Daily'), 'Weekly' => ts('Weekly'), 'Monthly' => ts('Monthly')]);
     $this->add('select', 'auth_method', ts('Authentication Method'), [
       'delegated' => ts('Sign in with Microsoft'),
       'application' => ts('Application Credentials'),
@@ -33,6 +34,9 @@ class CRM_M365GroupSync_Form_Admin extends CRM_Core_Form {
     $this->addActionButton('compare_all', ts('Compare All'));
     $this->addActionButton('dry_run_all', ts('Dry Run All'));
     $this->addActionButton('sync_all', ts('Sync All Now'));
+    if (CRM_M365GroupSync_Service_Domain::isLegacyResolutionRequired()) {
+      $this->addActionButton('claim_legacy', ts('Assign legacy data to this domain'), 'fa-exclamation-triangle');
+    }
     $this->add('select', 'mapped_status', ts('Mapped Status'), [
       'mapped' => ts('Mapped'),
       'not_mapped' => ts('Not Mapped'),
@@ -70,18 +74,22 @@ class CRM_M365GroupSync_Form_Admin extends CRM_Core_Form {
     if ($activeOperation === '') {
       $activeOperation = (string) CRM_Core_DAO::singleValueQuery(
         "SELECT operation_id FROM civicrm_m365_sync_run
-          WHERE status IN ('queued','running','retry_wait')
+          WHERE domain_id=%1 AND status IN ('queued','running','retry_wait')
             AND operation_id IS NOT NULL AND operation_id<>''
-       ORDER BY started_date ASC,id ASC LIMIT 1"
+       ORDER BY started_date ASC,id ASC LIMIT 1",
+        [1 => [CRM_M365GroupSync_Service_Domain::id(), 'Positive']]
       );
     }
     $this->assign('activeOperation', $activeOperation);
+    $this->assign('legacyResolutionRequired', CRM_M365GroupSync_Service_Domain::isLegacyResolutionRequired());
+    $this->assign('currentDomainId', CRM_M365GroupSync_Service_Domain::id());
     CRM_Core_Session::singleton()->set('m365_validation_findings', []);
   }
 
   public function setDefaultValues(): array {
     return [
       'enabled' => Civi::settings()->get('m365_group_sync_enabled'),
+      'automatic_cadence' => Civi::settings()->get('m365_group_sync_automatic_cadence') ?: 'Hourly',
       'auth_method' => Civi::settings()->get('m365_group_sync_auth_method') ?: 'delegated',
       'tenant_id' => Civi::settings()->get('m365_group_sync_tenant_id'),
       'client_id' => Civi::settings()->get('m365_group_sync_client_id'),
@@ -102,6 +110,16 @@ class CRM_M365GroupSync_Form_Admin extends CRM_Core_Form {
 
   public function postProcess(): void {
     $values = $this->exportValues();
+    if ($this->isAction('claim_legacy')) {
+      try {
+        CRM_M365GroupSync_Upgrader::claimLegacyDataForCurrentDomain();
+        CRM_Core_Session::setStatus(ts('Legacy Microsoft 365 synchronization data was assigned to this CiviCRM domain.'), ts('Domain migration complete'), 'success');
+      }
+      catch (Throwable $e) {
+        CRM_Core_Session::setStatus($e->getMessage(), ts('Domain migration could not complete'), 'error');
+      }
+      return;
+    }
     if ($this->isAction('connect')) {
       try {
         $this->saveConnectionFields($values);
@@ -158,7 +176,9 @@ class CRM_M365GroupSync_Form_Admin extends CRM_Core_Form {
       return;
     }
     Civi::settings()->set('m365_group_sync_enabled', !empty($values['enabled']));
+    Civi::settings()->set('m365_group_sync_automatic_cadence', (string) ($values['automatic_cadence'] ?? 'Hourly'));
     Civi::settings()->set('m365_group_sync_retention_days', (int) ($values['retention_days'] ?? 90));
+    CRM_M365GroupSync_Upgrader::ensureScheduledJob(CRM_M365GroupSync_Service_Domain::id());
     if ($requested === $active) {
       Civi::settings()->set('m365_group_sync_auth_method', $active);
       if ($changes['identityChanged']) {

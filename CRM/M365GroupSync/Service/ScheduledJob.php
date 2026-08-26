@@ -4,6 +4,8 @@
 class CRM_M365GroupSync_Service_ScheduledJob {
 
   public function run(): array {
+    CRM_M365GroupSync_Service_Domain::assertResolved();
+    CRM_M365GroupSync_Upgrader::ensureScheduledJob(CRM_M365GroupSync_Service_Domain::id());
     $now = time();
     $lastCleanup = (int) Civi::settings()->get('m365_group_sync_last_cleanup');
     $cleaned = 0;
@@ -14,7 +16,10 @@ class CRM_M365GroupSync_Service_ScheduledJob {
 
     $queued = 0;
     $lastAuto = (int) Civi::settings()->get('m365_group_sync_last_auto_enqueue');
-    if (Civi::settings()->get('m365_group_sync_enabled') && (!$lastAuto || $now - $lastAuto >= 3600)) {
+    $cadence = (string) (Civi::settings()->get('m365_group_sync_automatic_cadence') ?: 'Hourly');
+    $intervals = ['Hourly' => 3600, 'Daily' => 86400, 'Weekly' => 604800, 'Monthly' => 2592000];
+    $interval = $intervals[$cadence] ?? $intervals['Hourly'];
+    if (Civi::settings()->get('m365_group_sync_enabled') && (!$lastAuto || $now - $lastAuto >= $interval)) {
       $operation = (new CRM_M365GroupSync_Service_Sync())->startMany(
         CRM_M365GroupSync_Service_Mapping::all(),
         'sync',
@@ -33,7 +38,7 @@ class CRM_M365GroupSync_Service_ScheduledJob {
       throw new CRM_Core_Exception('Microsoft 365 queue worker failed: ' . $e->getMessage(), 0, [], $e);
     }
 
-    return ['automatic_runs_queued' => $queued, 'logs_cleaned' => $cleaned] + $worked;
+    return ['domain_id' => CRM_M365GroupSync_Service_Domain::id(), 'automatic_cadence' => $cadence, 'automatic_runs_queued' => $queued, 'logs_cleaned' => $cleaned] + $worked;
   }
 
 }
