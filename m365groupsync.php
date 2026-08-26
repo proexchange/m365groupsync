@@ -100,7 +100,3 @@ function m365groupsync_civicrm_pre($op, $objectName, $id, &$params): void {
     Mapping::deleteForGroup((int) $id);
   }
 }
-
-function m365groupsync_civicrm_apiWrappers(&$wrappers, $apiRequest): void {
-  // Reserved for API consumers; all write operations remain explicitly opt-in.
-}

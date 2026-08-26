@@ -155,18 +155,24 @@ CRM.$(function($) {
     }
     function advance() {
       if (stopped) return;
-      CRM.api3('M365GroupSync', 'process', {operation_id: operation}).done(function(result) {
+      CRM.api4('M365GroupSync', 'process', {operationId: operation}).then(function(result) {
         var state = render(result);
         if (state.active) window.setTimeout(advance, state.waiting ? 3000 : 500);
         else window.setTimeout(function(){ window.location.href = window.location.href.replace(/([?&])op=[^&]*&?/, '$1').replace(/[?&]$/, ''); }, 1200);
-      }).fail(function(error) {
+      }).catch(function(error) {
         stopped = true;
         $progress.find('.crm-m365-progress-summary').text((error && error.error_message) || 'Queue processing failed. The scheduled job can resume this operation.');
       });
     }
     $progress.on('click', '.crm-m365-cancel', function() {
       $(this).prop('disabled', true);
-      CRM.api3('M365GroupSync', 'cancel', {operation_id: operation}).done(function(result) { render(result); if (!stopped) window.setTimeout(advance, 250); });
+      CRM.api4('M365GroupSync', 'cancel', {operationId: operation}).then(function(result) {
+        render(result);
+        if (!stopped) window.setTimeout(advance, 250);
+      }).catch(function(error) {
+        stopped = true;
+        $progress.find('.crm-m365-progress-summary').text((error && error.error_message) || 'Cancellation failed. The scheduled job can resume this operation.');
+      });
     });
     advance();
   }

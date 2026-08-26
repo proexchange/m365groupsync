@@ -83,6 +83,10 @@ Selecting a different method or changing the Tenant ID or Application ID cancels
 
 Client secrets, access tokens, and refresh tokens are stored with CiviCRM's credential encryption key. A CiviCRM settings override may be used for production secret management.
 
+## Permission and API access
+
+The extension adds **Microsoft 365 Group Sync: administer synchronization**. Grant it to every CiviCRM user who administers mappings or runs synchronization, including the dedicated CiviCRM cron user. All Microsoft 365 Group Sync actions use APIv4: `run`, `start`, `process`, `status`, `cancel`, and `scheduled`.
+
 ## Map and synchronize groups
 
 1. As a user with **Microsoft 365 Group Sync: administer synchronization**, edit a CiviCRM Group and select an existing mail-enabled Microsoft 365 (Unified) group in the **Microsoft 365 Group** field. A Microsoft group can be mapped to only one CiviCRM Group.

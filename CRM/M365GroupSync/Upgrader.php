@@ -26,7 +26,10 @@ class CRM_M365GroupSync_Upgrader extends CRM_Extension_Upgrader_Base {
     CRM_Core_DAO::executeQuery("CREATE TABLE IF NOT EXISTS civicrm_m365_sync_work (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, run_id CHAR(36) NOT NULL, item_type VARCHAR(16) NOT NULL, phase VARCHAR(16) NOT NULL, state VARCHAR(16) NOT NULL, civicrm_contact_id INT UNSIGNED NULL, effective_email VARCHAR(255) NULL, m365_user_id VARCHAR(128) NULL, attempts INT UNSIGNED NOT NULL DEFAULT 0, available_date DATETIME NULL, message TEXT NULL, created_date DATETIME NOT NULL, modified_date DATETIME NOT NULL, PRIMARY KEY (id), KEY run_phase_state (run_id,phase,state,available_date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     CRM_Core_DAO::executeQuery("CREATE TABLE IF NOT EXISTS civicrm_m365_sync_log (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, run_id CHAR(36) NOT NULL, civicrm_group_id INT UNSIGNED NOT NULL, civicrm_contact_id INT UNSIGNED NULL, effective_email VARCHAR(255) NULL, action VARCHAR(32) NOT NULL, result VARCHAR(16) NOT NULL, message TEXT NULL, m365_group_id VARCHAR(128) NULL, m365_user_id VARCHAR(128) NULL, created_date DATETIME NOT NULL, PRIMARY KEY (id), KEY run_group (run_id, civicrm_group_id), KEY contact_email (civicrm_contact_id, effective_email)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     Civi::settings()->set('m365_group_sync_enabled', FALSE); Civi::settings()->set('m365_group_sync_retention_days', 90);
-    CRM_Core_DAO::executeQuery("INSERT INTO civicrm_job (domain_id,run_frequency,name,description,api_entity,api_action,is_active) SELECT 1,'Always','Microsoft 365 Group Membership Sync','Process queued work and enqueue automatic reconciliation hourly','M365GroupSync','scheduled',1 WHERE NOT EXISTS (SELECT 1 FROM civicrm_job j WHERE j.api_entity='M365GroupSync' AND j.api_action='scheduled')");
+    CRM_Core_DAO::executeQuery(
+      "INSERT INTO civicrm_job (domain_id,run_frequency,name,description,api_entity,api_action,parameters,is_active) SELECT 1,'Always','Microsoft 365 Group Membership Sync','Process queued work and enqueue automatic reconciliation hourly','M365GroupSync','scheduled',%1,1 WHERE NOT EXISTS (SELECT 1 FROM civicrm_job j WHERE j.api_entity='M365GroupSync' AND j.api_action='scheduled')",
+      [1 => ["version=4", 'String']]
+    );
   }
 
   public static function uninstall(): void {
@@ -112,6 +115,30 @@ class CRM_M365GroupSync_Upgrader extends CRM_Extension_Upgrader_Base {
     }
     CRM_Core_Invoke::rebuildMenuAndCaches(TRUE);
     $this->ctx->log->info('Installed dedicated Microsoft 365 permissions and credential-binding safeguards.');
+    return TRUE;
+  }
+
+  public function upgrade_1004() {
+    // Discover the new APIv4 entity and interactive actions.
+    CRM_Core_Invoke::rebuildMenuAndCaches(TRUE);
+    $this->ctx->log->info('Registered Microsoft 365 Group Sync APIv4 actions.');
+    return TRUE;
+  }
+
+  public function upgrade_1005() {
+    // Preserve the existing job's ID, enabled state, schedule, and run history.
+    // CiviCRM cron authenticates as the configured cron user, which must have
+    // the extension's administration permission.
+    CRM_Core_DAO::executeQuery(
+      'UPDATE civicrm_job SET parameters = %1 WHERE api_entity = %2 AND api_action = %3',
+      [
+        1 => ["version=4", 'String'],
+        2 => ['M365GroupSync', 'String'],
+        3 => ['scheduled', 'String'],
+      ]
+    );
+    CRM_Core_Invoke::rebuildMenuAndCaches(TRUE);
+    $this->ctx->log->info('Migrated Microsoft 365 Group Sync scheduled job to APIv4.');
     return TRUE;
   }
 
